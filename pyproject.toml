@@ -1,0 +1,25 @@
+[project]
+name = "simgen-agent"
+version = "0.1.0"
+description = "AI-driven Discrete Event Simulation model generation via LangGraph + MCP."
+requires-python = ">=3.11"
+dependencies = [
+    "langchain-groq>=0.2.0",
+    "langchain-core>=0.3.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+supervisor = "src.agents.supervisor_agent:_repl"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.uv]
+package = true
