@@ -1,0 +1,786 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://text2sim.com/schemas/des-simpy-production-model.json",
+  "title": "SimPy-Compatible Production/Manufacturing DES Model Configuration",
+  "description": "Practical DES configuration for production and manufacturing systems, optimized for SimPy's native capabilities. Implementation notes: (1) exp(x) uses mean=x, (2) max_wait balking is implemented as a reneging timeout, (3) entity_type probabilities must sum to 1.0, (4) smaller priority numbers = higher priority (e.g. expedited entities), (5) buffer capacities enforce upstream blocking when full, (6) setup_time applies once at workstation entry (sequence-dependent setups use 'changeover_matrix'), (7) scrap removes the entity from the line; rework loops it back to a specified step.",
+  "type": "object",
+  "required": ["run_time"],
+  "oneOf": [
+    {"required": ["arrival_pattern"], "not": {"required": ["num_entities"]}},
+    {"required": ["num_entities"], "not": {"required": ["arrival_pattern"]}}
+  ],
+  "properties": {
+    "run_time": {
+      "type": "number",
+      "description": "Total simulation runtime (in time units, e.g. minutes of a shift)",
+      "minimum": 0.1,
+      "examples": [480, 960, 1440, 7200]
+    },
+    "num_entities": {
+      "type": "integer",
+      "description": "Total number of entities to generate (mutually exclusive with arrival_pattern). Useful for closed-system runs.",
+      "minimum": 1,
+      "examples": [100, 500, 1000]
+    },
+    "time_unit": {
+      "type": "string",
+      "enum": ["seconds", "minutes", "hours", "days"],
+      "default": "minutes",
+      "description": "Unit of time for all durations in the model (documentation only — values are unitless to SimPy)"
+    },
+    "entity_types": {
+      "type": "object",
+      "description": "Different entity types with their characteristics (product mix)",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "required": ["probability"],
+          "properties": {
+            "probability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Mix probability for this entity type (must sum to 1.0 across all types)"
+            },
+            "value": {
+              "type": "object",
+              "description": "Per-unit value range (e.g. revenue, contribution margin, or cost)",
+              "properties": {
+                "min": {"type": "number", "minimum": 0},
+                "max": {"type": "number", "minimum": 0}
+              },
+              "required": ["min", "max"]
+            },
+            "priority": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 5,
+              "description": "Entity priority (1=highest/expedited, 10=lowest). Used by priority/preemptive workstations and routing rules."
+            },
+            "due_date_offset": {
+              "type": "string",
+              "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+              "description": "Time-from-release distribution for due-date computation (used for tardiness KPIs)"
+            },
+            "process_plan": {
+              "type": "string",
+              "description": "Name of the process_plans entry this entity type follows. If omitted, processing_rules.steps is used."
+            },
+            "batch_size": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1,
+              "description": "Number of units per released entity (lot size). Affects per-step service time when batching is enabled."
+            },
+            "attributes": {
+              "type": "object",
+              "description": "Custom attributes for routing, setup grouping, or quality rules (e.g. material, family, color)",
+              "patternProperties": {
+                "^[a-zA-Z][a-zA-Z0-9_]*$": {
+                  "oneOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"}
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "standard_part": {"probability": 0.7, "value": {"min": 50, "max": 80}, "priority": 5, "batch_size": 10, "attributes": {"family": "A"}},
+          "premium_part": {"probability": 0.25, "value": {"min": 150, "max": 250}, "priority": 3, "batch_size": 5, "attributes": {"family": "B"}},
+          "hot_job": {"probability": 0.05, "value": {"min": 500, "max": 1000}, "priority": 1, "batch_size": 1, "attributes": {"family": "B"}}
+        }
+      ]
+    },
+    "workstations": {
+      "type": "object",
+      "description": "Production resources: machines, cells, operators, or workstations (maps directly to SimPy resource types)",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "required": ["capacity"],
+          "properties": {
+            "capacity": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Number of parallel servers (e.g. identical machines in the cell)"
+            },
+            "resource_type": {
+              "enum": ["fifo", "priority", "preemptive"],
+              "default": "fifo",
+              "description": "Queue discipline: fifo=Resource, priority=PriorityResource, preemptive=PreemptiveResource (preemption used for expedited-entity interruption)"
+            },
+            "setup_time": {
+              "type": "string",
+              "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+              "description": "Time-independent setup time applied once per entity arrival at this workstation"
+            },
+            "batch_processing": {
+              "type": "object",
+              "description": "If present, the workstation processes entities in batches",
+              "properties": {
+                "min_batch": {"type": "integer", "minimum": 1},
+                "max_batch": {"type": "integer", "minimum": 1},
+                "wait_for_full": {"type": "boolean", "default": false, "description": "If true, wait for max_batch before starting; otherwise start when min_batch is reached"}
+              },
+              "required": ["min_batch", "max_batch"]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "cnc_mill": {"capacity": 2, "resource_type": "priority", "setup_time": "normal(15, 3)"},
+          "heat_treat": {"capacity": 1, "resource_type": "fifo", "batch_processing": {"min_batch": 4, "max_batch": 8, "wait_for_full": false}},
+          "assembly": {"capacity": 3, "resource_type": "preemptive", "changeover_matrix": {"A>B": "uniform(10, 20)", "B>A": "uniform(10, 20)"}},
+          "inspection": {"capacity": 1, "resource_type": "fifo"}
+        }
+      ]
+    },
+    "buffers": {
+      "type": "object",
+      "description": "Inter-stage WIP buffers with finite capacity. When full, upstream workstations block (stall) — this is the production analog of balking.",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "required": ["capacity", "upstream", "downstream"],
+          "properties": {
+            "capacity": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maximum WIP units the buffer can hold"
+            },
+            "upstream": {
+              "type": "string",
+              "description": "Workstation that pushes into this buffer (blocks when buffer is full)"
+            },
+            "downstream": {
+              "type": "string",
+              "description": "Workstation that pulls from this buffer (starves when buffer is empty)"
+            },
+            "initial_level": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "Initial WIP in buffer at sim start"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "wip_mill_to_assembly": {"capacity": 20, "upstream": "cnc_mill", "downstream": "assembly", "initial_level": 0}
+        }
+      ]
+    },
+    "processing_rules": {
+      "type": "object",
+      "description": "Default linear process flow and service times. Job types with their own 'process_plan' override this. All step names must match workstation names.",
+      "required": ["steps"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "items": {"type": "string"},
+          "minItems": 1,
+          "description": "Ordered list of workstations on the default routing"
+        }
+      },
+      "patternProperties": {
+        "^(?!steps$)[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "properties": {
+            "distribution": {
+              "type": "string",
+              "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+              "description": "Per-unit processing (cycle) time distribution"
+            },
+            "conditional_distributions": {
+              "type": "object",
+              "description": "Per-entity-type processing times (overrides 'distribution')",
+              "patternProperties": {
+                "^[a-zA-Z][a-zA-Z0-9_]*$": {
+                  "type": "string",
+                  "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$"
+                }
+              }
+            },
+            "scale_by_batch": {
+              "type": "boolean",
+              "default": true,
+              "description": "If true, total step time = distribution_sample * batch_size; if false, time is per-entity regardless of batch size."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "examples": [
+        {
+          "steps": ["cnc_mill", "assembly", "inspection"],
+          "cnc_mill": {"distribution": "normal(8, 1.5)", "scale_by_batch": true},
+          "assembly": {
+            "conditional_distributions": {
+              "standard_part": "normal(5, 1)",
+              "premium_part": "normal(8, 2)",
+              "hot_job": "normal(5, 1)"
+            }
+          },
+          "inspection": {"distribution": "uniform(1, 2)"}
+        }
+      ]
+    },
+    "process_plans": {
+      "type": "object",
+      "description": "Named routings for entity types that don't follow the default processing_rules.steps. Allows alternative process flows for different products.",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "required": ["steps"],
+          "properties": {
+            "steps": {
+              "type": "array",
+              "items": {"type": "string"},
+              "minItems": 1,
+              "description": "Ordered workstation sequence for this routing"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "plan_premium": {"steps": ["cnc_mill", "heat_treat", "assembly", "inspection"]},
+          "plan_standard": {"steps": ["cnc_mill", "assembly", "inspection"]}
+        }
+      ]
+    },
+    "quality_rules": {
+      "type": "object",
+      "description": "Scrap and rework rules applied at inspection or after specific steps",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "required": ["after_step"],
+          "properties": {
+            "after_step": {
+              "type": "string",
+              "description": "Workstation after which the quality check is evaluated"
+            },
+            "scrap_probability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0,
+              "description": "Probability the entity is scrapped (removed from the line)"
+            },
+            "rework_probability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0,
+              "description": "Probability the entity is sent back for rework"
+            },
+            "rework_target": {
+              "type": "string",
+              "description": "Workstation the entity loops back to for rework"
+            },
+            "max_rework_attempts": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 1,
+              "description": "Max rework loops before the entity is scrapped"
+            },
+            "conditional_rates": {
+              "type": "object",
+              "description": "Per-entity-type scrap/rework probability overrides",
+              "patternProperties": {
+                "^[a-zA-Z][a-zA-Z0-9_]*$": {
+                  "type": "object",
+                  "properties": {
+                    "scrap_probability": {"type": "number", "minimum": 0, "maximum": 1},
+                    "rework_probability": {"type": "number", "minimum": 0, "maximum": 1}
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "post_machining_qc": {
+            "after_step": "cnc_mill",
+            "scrap_probability": 0.02,
+            "rework_probability": 0.08,
+            "rework_target": "cnc_mill",
+            "max_rework_attempts": 2
+          }
+        }
+      ]
+    },
+    "balking_rules": {
+      "type": "object",
+      "description": "Rules for entities being rejected/diverted at release (e.g. order cancellation when WIP is too high, or perishable entities rejected when wait exceeds shelf life). Less common in production than in services, but retained for time-critical or capacity-controlled lines.",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": ["queue_length", "wait_time", "probability", "wip_level"],
+              "description": "Type of balking condition. 'wip_level' compares total WIP against a threshold."
+            },
+            "resource": {
+              "type": "string",
+              "description": "Workstation or buffer to check (for queue_length, wait_time, wip_level)"
+            },
+            "max_length": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum queue length / WIP before rejection"
+            },
+            "max_wait": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum wait time before rejection (implemented as reneging timeout in SimPy)"
+            },
+            "probability": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Base probability of rejection at release"
+            },
+            "priority_multipliers": {
+              "type": "object",
+              "description": "Rejection probability multipliers by entity priority (lower priority = more likely to be rejected)",
+              "patternProperties": {
+                "^(?:[1-9]|10)$": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 5
+                }
+              }
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "wip_cap": {"type": "wip_level", "resource": "wip_mill_to_assembly", "max_length": 20, "priority_multipliers": {"1": 0.0, "10": 2.0}}
+        }
+      ]
+    },
+    "reneging_rules": {
+      "type": "object",
+      "description": "Rules for entities abandoning queues (e.g. perishable materials, time-bound orders, or auto-expediting). SimPy native.",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "properties": {
+            "abandon_time": {
+              "type": "string",
+              "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+              "description": "Time distribution after which a queued entity is scrapped or rerouted"
+            },
+            "on_abandon": {
+              "enum": ["scrap", "reroute"],
+              "default": "scrap",
+              "description": "What happens when the entity abandons the queue"
+            },
+            "reroute_target": {
+              "type": "string",
+              "description": "Workstation to reroute to when on_abandon='reroute'"
+            },
+            "priority_multipliers": {
+              "type": "object",
+              "description": "Patience multipliers by priority (higher priority = more patient, longer tolerance)",
+              "patternProperties": {
+                "^(?:[1-9]|10)$": {
+                  "type": "number",
+                  "minimum": 0.1,
+                  "maximum": 10
+                }
+              }
+            }
+          },
+          "required": ["abandon_time"],
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "perishable_expiry": {
+            "abandon_time": "normal(120, 30)",
+            "on_abandon": "scrap",
+            "priority_multipliers": {"1": 5.0, "5": 1.0, "10": 0.3}
+          }
+        }
+      ]
+    },
+    "arrival_pattern": {
+      "type": "object",
+      "description": "Job release pattern (mutually exclusive with num_entities)",
+      "properties": {
+        "distribution": {
+          "type": "string",
+          "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+          "description": "Inter-release time distribution (exp(x) means mean=x, not rate=x)",
+          "examples": ["exp(5)", "uniform(2, 8)", "normal(5, 1)"]
+        }
+      },
+      "required": ["distribution"],
+      "additionalProperties": false
+    },
+    "simple_routing": {
+      "type": "object",
+      "description": "Conditional routing based on entity attributes (e.g. by family, material, or priority)",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "properties": {
+            "conditions": {
+              "type": "array",
+              "description": "If-then routing rules evaluated in order",
+              "items": {
+                "type": "object",
+                "required": ["attribute", "value", "destination"],
+                "properties": {
+                  "attribute": {"type": "string"},
+                  "operator": {
+                    "enum": ["==", "!=", ">", "<", ">=", "<="],
+                    "default": "=="
+                  },
+                  "value": {
+                    "oneOf": [
+                      {"type": "string"},
+                      {"type": "number"},
+                      {"type": "boolean"}
+                    ]
+                  },
+                  "destination": {
+                    "type": "string",
+                    "description": "Workstation to route to if condition matches"
+                  }
+                }
+              }
+            },
+            "default_destination": {
+              "type": "string",
+              "description": "Default workstation if no condition matches"
+            }
+          },
+          "required": ["conditions"],
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "by_family": {
+            "conditions": [
+              {"attribute": "family", "operator": "==", "value": "B", "destination": "heat_treat"}
+            ],
+            "default_destination": "assembly"
+          }
+        }
+      ]
+    },
+    "breakdowns": {
+      "type": "object",
+      "description": "Stochastic workstation failure and repair cycles (unplanned downtime). Component of OEE availability.",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "required": ["mtbf", "repair_time"],
+          "properties": {
+            "mtbf": {
+              "type": "string",
+              "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+              "description": "Mean time between failures"
+            },
+            "repair_time": {
+              "type": "string",
+              "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+              "description": "Time to repair (MTTR distribution)"
+            },
+            "preempt_in_progress": {
+              "type": "boolean",
+              "default": true,
+              "description": "If true, the in-progress entity is interrupted; processing resumes after repair (else it restarts)"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "cnc_mill": {"mtbf": "exp(480)", "repair_time": "normal(45, 15)", "preempt_in_progress": true}
+        }
+      ]
+    },
+    "maintenance": {
+      "type": "object",
+      "description": "Scheduled preventive maintenance windows (planned downtime)",
+      "patternProperties": {
+        "^[a-zA-Z][a-zA-Z0-9_]*$": {
+          "type": "object",
+          "required": ["workstation", "interval", "duration"],
+          "properties": {
+            "workstation": {
+              "type": "string",
+              "description": "Workstation taken offline for PM"
+            },
+            "interval": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Cycle time between PM events (deterministic)"
+            },
+            "duration": {
+              "type": "string",
+              "pattern": "^(uniform|normal|gauss|exp)\\s*\\(\\s*[0-9.]+\\s*(,\\s*[0-9.]+\\s*)?\\)$",
+              "description": "PM duration distribution"
+            },
+            "first_offset": {
+              "type": "number",
+              "minimum": 0,
+              "default": 0,
+              "description": "Time offset for the first PM event"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "examples": [
+        {
+          "weekly_pm_mill": {"workstation": "cnc_mill", "interval": 2400, "duration": "uniform(60, 90)", "first_offset": 2400}
+        }
+      ]
+    },
+    "shifts": {
+      "type": "object",
+      "description": "Working-hours pattern. Workstations not in any active shift are unavailable. Omit for 24/7 operation.",
+      "properties": {
+        "cycle_length": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Length of one shift cycle (e.g. 1440 for daily)"
+        },
+        "patterns": {
+          "type": "object",
+          "description": "Named on/off intervals within the cycle, keyed by workstation (or '*' for all)",
+          "patternProperties": {
+            "^([a-zA-Z][a-zA-Z0-9_]*|\\*)$": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["start", "end"],
+                "properties": {
+                  "start": {"type": "number", "minimum": 0},
+                  "end": {"type": "number", "minimum": 0}
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": ["cycle_length", "patterns"],
+      "examples": [
+        {"cycle_length": 1440, "patterns": {"*": [{"start": 480, "end": 1440}]}}
+      ]
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Custom names for simulation KPIs",
+      "properties": {
+        "released_metric": {
+          "type": "string",
+          "default": "entities_released",
+          "examples": ["parts_released", "orders_started"]
+        },
+        "completed_metric": {
+          "type": "string",
+          "default": "entities_completed",
+          "examples": ["parts_produced", "orders_shipped", "units_finished"]
+        },
+        "scrap_metric": {
+          "type": "string",
+          "default": "entities_scrapped",
+          "examples": ["parts_scrapped", "units_rejected"]
+        },
+        "rework_metric": {
+          "type": "string",
+          "default": "entities_reworked",
+          "examples": ["parts_reworked"]
+        },
+        "balk_metric": {
+          "type": "string",
+          "default": "entities_rejected",
+          "examples": ["orders_cancelled"]
+        },
+        "reneged_metric": {
+          "type": "string",
+          "default": "entities_expired",
+          "examples": ["batches_aborted"]
+        },
+        "value_metric": {
+          "type": "string",
+          "default": "total_value",
+          "examples": ["total_revenue", "total_cost", "throughput_value"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "statistics": {
+      "type": "object",
+      "description": "Additional statistics to collect",
+      "properties": {
+        "collect_wait_times": {"type": "boolean", "default": true, "description": "Per-step queue wait times"},
+        "collect_queue_lengths": {"type": "boolean", "default": false, "description": "Queue length time series (also covers buffer levels)"},
+        "collect_utilization": {"type": "boolean", "default": true, "description": "Workstation utilization (busy + setup + repair)"},
+        "collect_cycle_time": {"type": "boolean", "default": true, "description": "End-to-end entity cycle time (release to completion)"},
+        "collect_wip": {"type": "boolean", "default": true, "description": "WIP level over time (for Little's Law)"},
+        "collect_tardiness": {"type": "boolean", "default": false, "description": "Lateness vs. due_date_offset (requires due_date_offset on entity_types)"},
+        "collect_oee": {"type": "boolean", "default": false, "description": "Compute OEE = Availability x Performance x Quality per workstation"},
+        "warmup_period": {"type": "number", "minimum": 0, "default": 0, "description": "Time to exclude from statistics (steady-state analysis)"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "title": "Two-Stage Machining Line",
+      "description": "CNC mill feeding assembly through a finite WIP buffer, with breakdowns and post-machining QC",
+      "run_time": 2400,
+      "time_unit": "minutes",
+      "arrival_pattern": {"distribution": "exp(6)"},
+      "entity_types": {
+        "standard_part": {"probability": 0.7, "value": {"min": 50, "max": 80}, "priority": 5, "batch_size": 5, "attributes": {"family": "A"}},
+        "premium_part": {"probability": 0.25, "value": {"min": 150, "max": 250}, "priority": 3, "batch_size": 5, "attributes": {"family": "B"}},
+        "hot_job": {"probability": 0.05, "value": {"min": 500, "max": 1000}, "priority": 1, "batch_size": 1, "attributes": {"family": "B"}}
+      },
+      "workstations": {
+        "cnc_mill": {"capacity": 2, "resource_type": "priority", "setup_time": "normal(15, 3)", "changeover_matrix": {"A>B": "uniform(20, 30)", "B>A": "uniform(20, 30)"}},
+        "assembly": {"capacity": 3, "resource_type": "preemptive"},
+        "inspection": {"capacity": 1, "resource_type": "fifo"}
+      },
+      "buffers": {
+        "wip_mill_to_assembly": {"capacity": 15, "upstream": "cnc_mill", "downstream": "assembly"}
+      },
+      "processing_rules": {
+        "steps": ["cnc_mill", "assembly", "inspection"],
+        "cnc_mill": {"distribution": "normal(8, 1.5)", "scale_by_batch": true},
+        "assembly": {
+          "conditional_distributions": {
+            "standard_part": "normal(5, 1)",
+            "premium_part": "normal(8, 2)",
+            "hot_job": "normal(5, 1)"
+          },
+          "scale_by_batch": true
+        },
+        "inspection": {"distribution": "uniform(1, 2)", "scale_by_batch": false}
+      },
+      "quality_rules": {
+        "post_machining_qc": {
+          "after_step": "cnc_mill",
+          "scrap_probability": 0.02,
+          "rework_probability": 0.08,
+          "rework_target": "cnc_mill",
+          "max_rework_attempts": 2
+        }
+      },
+      "breakdowns": {
+        "cnc_mill": {"mtbf": "exp(480)", "repair_time": "normal(45, 15)", "preempt_in_progress": true}
+      },
+      "maintenance": {
+        "weekly_pm_mill": {"workstation": "cnc_mill", "interval": 2400, "duration": "uniform(60, 90)", "first_offset": 2400}
+      },
+      "metrics": {
+        "released_metric": "parts_released",
+        "completed_metric": "parts_produced",
+        "scrap_metric": "parts_scrapped",
+        "rework_metric": "parts_reworked",
+        "value_metric": "total_revenue"
+      },
+      "statistics": {
+        "collect_wait_times": true,
+        "collect_queue_lengths": true,
+        "collect_utilization": true,
+        "collect_cycle_time": true,
+        "collect_wip": true,
+        "collect_oee": true,
+        "warmup_period": 240
+      }
+    },
+    {
+      "title": "Mixed-Routing Job Shop with Batch Oven",
+      "description": "Two routings: premium parts pass through a batch heat-treat oven, standard parts skip it. Shift schedule and tardiness tracked against due dates.",
+      "run_time": 4800,
+      "time_unit": "minutes",
+      "arrival_pattern": {"distribution": "exp(8)"},
+      "entity_types": {
+        "standard_part": {"probability": 0.6, "value": {"min": 40, "max": 70}, "priority": 5, "process_plan": "plan_standard", "due_date_offset": "uniform(240, 480)", "attributes": {"family": "A"}},
+        "premium_part": {"probability": 0.4, "value": {"min": 120, "max": 200}, "priority": 3, "process_plan": "plan_premium", "due_date_offset": "uniform(480, 720)", "attributes": {"family": "B"}}
+      },
+      "workstations": {
+        "cnc_mill": {"capacity": 2, "resource_type": "fifo", "setup_time": "normal(15, 3)"},
+        "heat_treat": {"capacity": 1, "resource_type": "fifo", "batch_processing": {"min_batch": 4, "max_batch": 8, "wait_for_full": false}},
+        "assembly": {"capacity": 3, "resource_type": "fifo"},
+        "inspection": {"capacity": 1, "resource_type": "fifo"}
+      },
+      "process_plans": {
+        "plan_premium": {"steps": ["cnc_mill", "heat_treat", "assembly", "inspection"]},
+        "plan_standard": {"steps": ["cnc_mill", "assembly", "inspection"]}
+      },
+      "processing_rules": {
+        "steps": ["cnc_mill", "assembly", "inspection"],
+        "cnc_mill": {"distribution": "normal(10, 2)"},
+        "heat_treat": {"distribution": "uniform(60, 90)", "scale_by_batch": false},
+        "assembly": {"distribution": "normal(7, 1.5)"},
+        "inspection": {"distribution": "uniform(2, 4)"}
+      },
+      "quality_rules": {
+        "final_qc": {
+          "after_step": "inspection",
+          "conditional_rates": {
+            "standard_part": {"scrap_probability": 0.015, "rework_probability": 0.04},
+            "premium_part": {"scrap_probability": 0.005, "rework_probability": 0.08}
+          },
+          "rework_target": "assembly",
+          "max_rework_attempts": 2
+        }
+      },
+      "breakdowns": {
+        "heat_treat": {"mtbf": "exp(1200)", "repair_time": "uniform(60, 180)"}
+      },
+      "shifts": {
+        "cycle_length": 1440,
+        "patterns": {"*": [{"start": 480, "end": 1440}]}
+      },
+      "metrics": {
+        "released_metric": "entities_released",
+        "completed_metric": "entities_shipped",
+        "scrap_metric": "entities_scrapped",
+        "value_metric": "contribution_margin"
+      },
+      "statistics": {
+        "collect_cycle_time": true,
+        "collect_wip": true,
+        "collect_utilization": true,
+        "collect_tardiness": true,
+        "collect_oee": true,
+        "warmup_period": 480
+      }
+    }
+  ],
+  "additionalProperties": false
+}
