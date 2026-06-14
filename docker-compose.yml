@@ -1,0 +1,18 @@
+# Local observability backend for simgen tool tracing.
+#
+#   docker compose up -d
+#   # run the MCP server (it exports spans via OTLP/HTTP to localhost:4318)
+#   open http://localhost:16686   # Jaeger UI -> service "simgen"
+#
+# Jaeger all-in-one ingests OTLP directly, so no separate collector is needed.
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: simgen-jaeger
+    ports:
+      - "16686:16686"   # Jaeger web UI
+      - "4317:4317"     # OTLP gRPC ingest
+      - "4318:4318"     # OTLP HTTP ingest (the exporter default)
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    restart: unless-stopped
