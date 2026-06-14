@@ -29,5 +29,6 @@ data/traces/
 
 
 # TEMP
-architecture/
+architecture/*
+!architecture/node_tools.md
 schemas/
