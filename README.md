@@ -53,32 +53,32 @@ The server speaks MCP over stdio, so it is normally launched by an MCP client
 > Note: the `simgen` console script in `pyproject.toml` is not currently wired
 > up — use `python -m simgen.server`.
 
-## Connecting to Claude Desktop
+## Connecting an MCP client
 
-1. Make sure dependencies are installed (`uv sync`).
-2. Edit the Claude Desktop config:
-   - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-   - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-3. Add the server, pointing at the project's venv Python (most robust — no
-   reliance on `uv` being on the client's PATH):
+The server is a standard stdio MCP server. Point any client at the project's
+venv Python — replace `/path/to/simgen` below with your clone's absolute path
+(on Windows, e.g. `C:\\Users\\you\\simgen` with `\\.venv\\Scripts\\python.exe`).
 
-   ```json
-   {
-     "mcpServers": {
-       "simgen": {
-         "command": "C:\\local\\htw\\simgen\\.venv\\Scripts\\python.exe",
-         "args": ["-m", "simgen.server"]
-       }
-     }
-   }
-   ```
+**Claude Desktop** — add to `claude_desktop_config.json`, then fully restart:
 
-   On macOS/Linux use `.venv/bin/python` instead.
-4. Fully restart Claude Desktop (quit from the tray/menu bar, not just the
-   window).
-5. In a chat, the `simgen` tools appear under the tools icon. Try:
-   *"create a source S1, a sink Sink1, a buffer B1 (capacity 4), connect B1 from
-   S1 to Sink1, then run the simulation until 10."*
+```json
+{
+  "mcpServers": {
+    "simgen": {
+      "command": "/path/to/simgen/.venv/bin/python",
+      "args": ["-m", "simgen.server"]
+    }
+  }
+}
+```
+
+**Claude Code** — from the cloned repo:
+
+```bash
+claude mcp add simgen -- ./.venv/bin/python -m simgen.server
+```
+
+The `simgen` tools then appear in the client (check with `/mcp` in Claude Code).
 
 ## Observability (OpenTelemetry + Jaeger)
 
