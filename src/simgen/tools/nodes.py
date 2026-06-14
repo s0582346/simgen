@@ -5,7 +5,7 @@ its arguments, instantiates the FactorySimPy node bound to the shared model
 environment, registers it, and returns a small JSON-serializable summary.
 The MCP server wraps these as tools; tests call them directly.
 
-Conventions (see architecture/TOOLS_PLAN.md):
+Conventions (see architecture/node_tools.md):
   - reject duplicate ids,
   - always bind to `model.env`, never leak env/simpy objects in results,
   - in_edges/out_edges start empty — wiring happens later via `connect`,
