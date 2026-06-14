@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from simgen.tools import nodes
+from simgen.tools import edges, nodes
 
 
 def register_tools(mcp: FastMCP) -> FastMCP:
@@ -189,6 +189,90 @@ def register_tools(mcp: FastMCP) -> FastMCP:
             blocking=blocking,
             out_edge_selection=out_edge_selection,
             node_setup_time=node_setup_time,
+        )
+
+    @mcp.tool()
+    def create_buffer(
+        id: str,
+        capacity: int = 1,
+        delay: float = 0,
+        mode: str = "FIFO",
+    ) -> dict:
+        """Create a Buffer edge: a FIFO/LIFO queue between two nodes.
+
+        A Buffer holds items waiting to be accepted by its destination node. It
+        connects exactly one src node to one dest node (both wired later via
+        connect).
+
+        Args:
+            id: unique edge identifier (unique across nodes and edges).
+            capacity: max items the buffer can hold; must be a positive int.
+            delay: constant time after which a put item becomes available to get.
+            mode: "FIFO" (oldest item available first) or "LIFO" (newest first).
+        """
+        return edges.create_buffer(
+            id=id,
+            capacity=capacity,
+            delay=delay,
+            mode=mode,
+        )
+
+    @mcp.tool()
+    def create_conveyor(
+        id: str,
+        conveyor_length: float,
+        speed: float,
+        item_length: float,
+        accumulating: bool = False,
+    ) -> dict:
+        """Create a ConveyorBelt edge that moves items along a belt.
+
+        Travel time derives from length/speed. It connects exactly one src node
+        to one dest node (both wired later via connect). The belt's capacity is
+        derived (int(ceil(conveyor_length) / item_length)) and returned in the
+        summary; it must come out >= 1.
+
+        Args:
+            id: unique edge identifier (unique across nodes and edges).
+            conveyor_length: physical length of the belt; must be > 0.
+            speed: belt speed; must be > 0.
+            item_length: length of each item on the belt; must be > 0 and should
+                match the item_length of items the upstream Source emits.
+            accumulating: if True, items bunch up when the belt stalls; if False,
+                the belt blocks.
+        """
+        return edges.create_conveyor(
+            id=id,
+            conveyor_length=conveyor_length,
+            speed=speed,
+            item_length=item_length,
+            accumulating=accumulating,
+        )
+
+    @mcp.tool()
+    def create_fleet(
+        id: str,
+        capacity: int = 1,
+        delay: float = 1,
+        transit_delay: float = 0,
+    ) -> dict:
+        """Create a Fleet edge: transporters (AGVs) moving items between nodes.
+
+        A Fleet moves up to `capacity` items at once. It connects exactly one
+        src node to one dest node (both wired later via connect).
+
+        Args:
+            id: unique edge identifier (unique across nodes and edges).
+            capacity: number of items moved per trip; must be a positive int.
+            delay: constant wait before the fleet departs if it hasn't filled to
+                capacity.
+            transit_delay: constant src->dest travel time.
+        """
+        return edges.create_fleet(
+            id=id,
+            capacity=capacity,
+            delay=delay,
+            transit_delay=transit_delay,
         )
 
     return mcp

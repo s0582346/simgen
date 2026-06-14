@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from simgen.model import FactoryModel
+
 
 def require_number(name: str, value: object) -> None:
     """Validate that `value` is a constant int or float.
@@ -25,3 +30,34 @@ def require_number(name: str, value: object) -> None:
             f"{name} must be a constant int or float (got {value!r}). "
             "Generators/callables are a later extension."
         )
+
+
+def require_positive_int(name: str, value: object) -> None:
+    """Validate that `value` is a positive int (>= 1).
+
+    `bool` is an `int` subclass, so exclude it explicitly — otherwise
+    True/False would slip through as a count.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an int (got {value!r}).")
+    if value < 1:
+        raise ValueError(f"{name} must be a positive int (>= 1).")
+
+
+def require_positive_number(name: str, value: object) -> None:
+    """Validate that `value` is a constant int/float and strictly positive."""
+    require_number(name, value)
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0 (got {value!r}).")
+
+
+def require_unique_id(id: str, model: FactoryModel) -> None:
+    """Validate a component id: non-empty string, not already taken.
+
+    Ids are global across nodes and edges (see `FactoryModel.has_id`), so this
+    rejects an id used by either registry.
+    """
+    if not isinstance(id, str) or not id:
+        raise ValueError("id must be a non-empty string.")
+    if model.has_id(id):
+        raise ValueError(f"A node or edge with id '{id}' already exists.")
