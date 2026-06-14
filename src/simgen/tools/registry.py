@@ -35,11 +35,13 @@ def register_tools(mcp: FastMCP) -> FastMCP:
             inter_arrival_time: constant time between item generations; must be
                 non-zero when blocking is False.
             flow_item_type: "item" or "pallet".
-            item_length: length assigned to each generated item.
+            item_length: physical length assigned to each generated item;
+                only used by conveyor edges (travel time = length/speed) and
+                ignored by plain buffers.
             blocking: if True, wait for out_edge space; if False, discard when
                 full.
-            out_edge_selection: edge-selection strategy, e.g. "FIRST_AVAILABLE",
-                "RANDOM", "ROUND_ROBIN", "FIRST", "LAST".
+            out_edge_selection: edge-selection strategy, one of
+                "FIRST_AVAILABLE", "RANDOM", "ROUND_ROBIN".
             node_setup_time: constant initial setup delay.
         """
         return nodes.create_source(
