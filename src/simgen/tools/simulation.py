@@ -13,20 +13,11 @@ Conventions (see architecture/simulation_tools.md):
 
 from __future__ import annotations
 
-import contextlib
-import io
-
 from simgen.model import FactoryModel
 from simgen.model import get_model as get_session_model
 from simgen.model import reset_model as reset_session_model
+from simgen.tools.telemetry import traced_stdout
 from simgen.tools.utils import require_positive_number
-
-
-@contextlib.contextmanager
-def _silenced():
-    """Swallow stdout so FactorySimPy's print() can't pollute the MCP channel."""
-    with contextlib.redirect_stdout(io.StringIO()):
-        yield
 
 
 def _edge_count(value: object) -> int:
@@ -72,7 +63,7 @@ def connect(
 
     src = model.nodes[src_id]
     dest = model.nodes[dest_id]
-    with _silenced():
+    with traced_stdout():
         edge.connect(src, dest)
 
     return {
@@ -159,7 +150,7 @@ def run_simulation(
 
     require_positive_number("until", until)
 
-    with _silenced():
+    with traced_stdout():
         model.env.run(until=until)
 
     nodes = {
